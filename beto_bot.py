@@ -1,16 +1,16 @@
-beto-bot.py
 import time
 import pandas as pd
 import requests
 import os
 import logging
 import json
-import traceback
 from binance.client import Client
 from binance.enums import *
 from datetime import datetime
+from dotenv import load_dotenv
 
-# 🔐 Credenciais via variáveis de ambiente
+load_dotenv()
+
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -18,26 +18,25 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 client = Client(API_KEY, API_SECRET)
 
-# 📋 Configuração de logs
-logging.basicConfig(
-    filename='beto_bot.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(filename='beto_bot.log', level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# 🎯 Configurações de risco
 VALOR_POR_OPERACAO = 6.00
 STOP_PERCENTUAL = 1.5
 PROFIT_PERCENTUAL = 3.0
-
-# ⚙️ Configurações técnicas
-MOEDAS_INTERESSANTES = ['BTCUSDT', 'ETHUSDT']
 INTERVALO = '5m'
 RSI_LIMITE_COMPRA = 40
-RSI_LIMITE_VENDA = 70
+VOLATILIDADE_MINIMA = 0.8
 
-# 🧠 Controle de posição com persistência
 POSICOES_PATH = 'posicoes_abertas.json'
+MOEDAS_ORIGINAIS = [
+    'BTCUSDT', 'ETHUSDT', 'DOGEUSDT', 'SHIBUSDT', 'PEPEUSDT', 'FLOKIUSDT', 'BONKUSDT', 'WIFUSDT',
+    '1000SATSUSDT', 'ORDIUSDT', 'LADYSUSDT', 'TURBOUSDT', 'RATSUSDT', 'MEMEUSDT', 'GMEUSDT',
+    'TRUMPUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'OPUSDT', 'ARBUSDT', 'LINKUSDT', 'INJUSDT',
+    'TIAUSDT', 'PYTHUSDT', 'JUPUSDT', 'RNDRUSDT', 'LDOUSDT', 'BLZUSDT', 'COTIUSDT', 'SUIUSDT',
+    'APTUSDT', 'MATICUSDT', 'AVAXUSDT', 'AAVEUSDT', 'UNIUSDT', 'DYDXUSDT', 'MASKUSDT', 'GALAUSDT',
+    'ALGOUSDT', 'XLMUSDT', 'TRXUSDT', 'NEARUSDT', 'STXUSDT', 'SKLUSDT', 'BICOUSDT', 'IDUSDT',
+    'HOOKUSDT', 'SSVUSDT'
+]
 
 def carregar_posicoes():
     if os.path.exists(POSICOES_PATH):
@@ -50,19 +49,26 @@ def salvar_posicoes(posicoes):
         json.dump(posicoes, f)
 
 posicoes_abertas = carregar_posicoes()
+MOEDAS_VALIDAS = []
 
-# 📲 Telegram
 def enviar_telegram(mensagem):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': mensagem,
-        'parse_mode': 'Markdown'
-    }
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': mensagem, 'parse_mode': 'Markdown'}
     try:
         requests.post(url, data=payload)
-    except Exception as e:
-        logging.error(f"Erro ao enviar Telegram: {e}")
+    except:
+        pass
+
+def validar_moedas():
+    global MOEDAS_VALIDAS
+    MOEDAS_VALIDAS = []
+    for symbol in MOEDAS_ORIGINAIS:
+        try:
+            client.get_symbol_ticker(symbol=symbol)
+            MOEDAS_VALIDAS.append(symbol)
+        except:
+            enviar_telegram(f"⚠️ Ignorando símbolo inválido: `{symbol}`")
+            logging.warning(f"Símbolo inválido: {symbol}")
 
 def buscar_dados(symbol):
     klines = client.get_klines(symbol=symbol, interval=INTERVALO, limit=100)
@@ -73,6 +79,7 @@ def buscar_dados(symbol):
     ])
     df['close'] = df['close'].astype(float)
     df['low'] = df['low'].astype(float)
+    df['high'] = df['high'].astype(float)
     df['mm9'] = df['close'].rolling(window=9).mean()
     df['mm21'] = df['close'].rolling(window=21).mean()
     return df
@@ -95,18 +102,18 @@ def cruzamento_mm(df):
     else:
         return None
 
+def volatilidade(df):
+    high = df['high'].iloc[-1]
+    low = df['low'].iloc[-1]
+    return ((high - low) / low) * 100
+
 def calcular_quantidade(preco):
     return round(VALOR_POR_OPERACAO / preco, 6)
 
 def comprar(symbol, preco, rsi):
     quantidade = calcular_quantidade(preco)
     try:
-        client.create_order(
-            symbol=symbol,
-            side=SIDE_BUY,
-            type=ORDER_TYPE_MARKET,
-            quantity=quantidade
-        )
+        client.create_order(symbol=symbol, side=SIDE_BUY, type=ORDER_TYPE_MARKET, quantity=quantidade)
         stop = preco * (1 - STOP_PERCENTUAL / 100)
         profit = preco * (1 + PROFIT_PERCENTUAL / 100)
         posicoes_abertas[symbol] = {
@@ -118,19 +125,14 @@ def comprar(symbol, preco, rsi):
         salvar_posicoes(posicoes_abertas)
         mensagem = (
             f"🟢 *COMPRA* `{symbol}`\n"
-            f"Entrada: ${preco:.2f}\n"
-            f"RSI: {rsi:.2f}\n"
-            f"Valor operado: ${VALOR_POR_OPERACAO:.2f}\n"
-            f"Stop: ${stop:.2f}\n"
-            f"Profit: ${profit:.2f}\n"
-            f"Qtd: {quantidade}\n"
+            f"Entrada: ${preco:.4f}\nRSI: {rsi:.2f}\nQtd: {quantidade}\n"
+            f"Stop: ${stop:.4f} | Profit: ${profit:.4f}\n"
             f"⏱ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         )
         enviar_telegram(mensagem)
         logging.info(mensagem)
     except Exception as e:
-        enviar_telegram(f"⚠️ Erro ao comprar `{symbol}`: {e}")
-        logging.error(traceback.format_exc())
+        logging.error(f"Erro ao comprar {symbol}: {e}")
 
 def vender(symbol, preco, motivo):
     if symbol not in posicoes_abertas:
@@ -138,20 +140,13 @@ def vender(symbol, preco, motivo):
     quantidade = posicoes_abertas[symbol]['quantidade']
     entrada = posicoes_abertas[symbol]['entrada']
     try:
-        client.create_order(
-            symbol=symbol,
-            side=SIDE_SELL,
-            type=ORDER_TYPE_MARKET,
-            quantity=quantidade
-        )
+        client.create_order(symbol=symbol, side=SIDE_SELL, type=ORDER_TYPE_MARKET, quantity=quantidade)
         resultado = preco - entrada
         percentual = (resultado / entrada) * 100
         mensagem = (
             f"🔴 *VENDA* `{symbol}`\n"
-            f"Saída: ${preco:.2f}\n"
-            f"Motivo: {motivo}\n"
-            f"Valor operado: ${VALOR_POR_OPERACAO:.2f}\n"
-            f"Resultado: {resultado:.2f} USD ({percentual:.2f}%)\n"
+            f"Saída: ${preco:.4f}\nMotivo: {motivo}\n"
+            f"Resultado: {resultado:.4f} USD ({percentual:.2f}%)\n"
             f"⏱ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         )
         enviar_telegram(mensagem)
@@ -159,24 +154,23 @@ def vender(symbol, preco, motivo):
         del posicoes_abertas[symbol]
         salvar_posicoes(posicoes_abertas)
     except Exception as e:
-        enviar_telegram(f"⚠️ Erro ao vender `{symbol}`: {e}")
-        logging.error(traceback.format_exc())
+        logging.error(f"Erro ao vender {symbol}: {e}")
 
 def loop_principal():
-    enviar_telegram("🤖 Beto-Bot iniciado com RSI + MM + Mínima + Stop/Profit.")
+    enviar_telegram("🤖 Beto-Bot Turbo Silencioso iniciado. Monitorando o universo cripto.")
+    validar_moedas()
     while True:
-        for symbol in MOEDAS_INTERESSANTES:
+        for symbol in MOEDAS_VALIDAS:
             try:
                 df = buscar_dados(symbol)
                 rsi = calcular_rsi(df)
                 preco = float(client.get_symbol_ticker(symbol=symbol)['price'])
                 cruzamento = cruzamento_mm(df)
-                minima_3_candles = df['low'].tail(3).min()
-
-                logging.info(f"[{symbol}] Preço: ${preco:.2f} | RSI: {rsi:.2f} | Cruzamento: {cruzamento} | Mínima: ${minima_3_candles:.2f}")
+                minima_3 = df['low'].tail(3).min()
+                vol = volatilidade(df)
 
                 if symbol not in posicoes_abertas:
-                    if rsi < RSI_LIMITE_COMPRA and cruzamento == 'compra' and preco <= minima_3_candles * 1.01:
+                    if rsi < RSI_LIMITE_COMPRA and cruzamento == 'compra' and preco <= minima_3 * 1.01 and vol >= VOLATILIDADE_MINIMA:
                         comprar(symbol, preco, rsi)
                 else:
                     posicao = posicoes_abertas[symbol]
@@ -188,8 +182,7 @@ def loop_principal():
                         vender(symbol, preco, 'Cruzamento MM')
 
             except Exception as e:
-                enviar_telegram(f"⚠️ Erro com `{symbol}`: {e}")
-                logging.error(traceback.format_exc())
+                logging.error(f"Erro com {symbol}: {e}")
         time.sleep(60)
 
 if __name__ == '__main__':

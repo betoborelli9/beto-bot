@@ -2,7 +2,6 @@ import time
 import pandas as pd
 import requests
 import os
-import logging
 import json
 from binance.client import Client
 from binance.enums import *
@@ -18,8 +17,6 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 client = Client(API_KEY, API_SECRET)
 
-logging.basicConfig(filename='beto_bot.log', level=logging.INFO, format='%(asctime)s - %(message)s')
-
 VALOR_POR_OPERACAO = 6.00
 STOP_PERCENTUAL = 1.5
 PROFIT_PERCENTUAL = 3.0
@@ -27,7 +24,6 @@ INTERVALO = '5m'
 RSI_LIMITE_COMPRA = 40
 VOLATILIDADE_MINIMA = 0.8
 
-POSICOES_PATH = 'posicoes_abertas.json'
 MOEDAS_ORIGINAIS = [
     'BTCUSDT', 'ETHUSDT', 'DOGEUSDT', 'SHIBUSDT', 'SOLUSDT',
     'BNBUSDT', 'XRPUSDT', 'OPUSDT', 'ARBUSDT', 'LINKUSDT',
@@ -39,17 +35,7 @@ MOEDAS_ORIGINAIS = [
     'HOOKUSDT', 'SSVUSDT'
 ]
 
-def carregar_posicoes():
-    if os.path.exists(POSICOES_PATH):
-        with open(POSICOES_PATH, 'r') as f:
-            return json.load(f)
-    return {}
-
-def salvar_posicoes(posicoes):
-    with open(POSICOES_PATH, 'w') as f:
-        json.dump(posicoes, f)
-
-posicoes_abertas = carregar_posicoes()
+posicoes_abertas = {}
 MOEDAS_VALIDAS = []
 
 def enviar_telegram(mensagem):
@@ -57,8 +43,8 @@ def enviar_telegram(mensagem):
     payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': mensagem, 'parse_mode': 'Markdown'}
     try:
         requests.post(url, data=payload)
-    except:
-        pass
+    except Exception as e:
+        print(f"Erro ao enviar mensagem para Telegram: {e}")
 
 def validar_moedas():
     global MOEDAS_VALIDAS
@@ -69,7 +55,7 @@ def validar_moedas():
             MOEDAS_VALIDAS.append(symbol)
         except:
             enviar_telegram(f"⚠️ Ignorando símbolo inválido: `{symbol}`")
-            logging.warning(f"Símbolo inválido: {symbol}")
+            print(f"Símbolo inválido: {symbol}")
 
 def buscar_dados(symbol):
     klines = client.get_klines(symbol=symbol, interval=INTERVALO, limit=100)
@@ -123,7 +109,6 @@ def comprar(symbol, preco, rsi):
             'stop': stop,
             'profit': profit
         }
-        salvar_posicoes(posicoes_abertas)
         mensagem = (
             f"🟢 *COMPRA* `{symbol}`\n"
             f"Entrada: ${preco:.4f}\nRSI: {rsi:.2f}\nQtd: {quantidade}\n"
@@ -131,9 +116,9 @@ def comprar(symbol, preco, rsi):
             f"⏱ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         )
         enviar_telegram(mensagem)
-        logging.info(mensagem)
+        print(mensagem)
     except Exception as e:
-        logging.error(f"Erro ao comprar {symbol}: {e}")
+        print(f"Erro ao comprar {symbol}: {e}")
 
 def vender(symbol, preco, motivo):
     if symbol not in posicoes_abertas:
@@ -151,13 +136,13 @@ def vender(symbol, preco, motivo):
             f"⏱ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         )
         enviar_telegram(mensagem)
-        logging.info(mensagem)
+        print(mensagem)
         del posicoes_abertas[symbol]
-        salvar_posicoes(posicoes_abertas)
     except Exception as e:
-        logging.error(f"Erro ao vender {symbol}: {e}")
+        print(f"Erro ao vender {symbol}: {e}")
 
 def loop_principal():
+    print("✅ Beto-Bot iniciado com sucesso")
     enviar_telegram("🤖 Beto-Bot Turbo Silencioso iniciado. Monitorando o universo cripto.")
     validar_moedas()
     while True:
@@ -183,7 +168,7 @@ def loop_principal():
                         vender(symbol, preco, 'Cruzamento MM')
 
             except Exception as e:
-                logging.error(f"Erro com {symbol}: {e}")
+                print(f"Erro com {symbol}: {e}")
         time.sleep(60)
 
 if __name__ == '__main__':

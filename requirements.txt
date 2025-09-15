@@ -1,4 +1,4 @@
 python-binance
 pandas
 requests
-python-dotenv
+python-dotenv 
